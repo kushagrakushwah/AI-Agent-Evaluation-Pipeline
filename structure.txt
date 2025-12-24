@@ -1,0 +1,25 @@
+Folder PATH listing for volume Local Disk
+Volume serial number is F071-0D60
+C:\USERS\KUSHA\DOWNLOADS\AI_AGENT_EVALUATION
+¦   docker-compose.yml
+¦   Dockerfile
+¦   README.md
+¦   requirements.txt
+¦   structure.txt
+¦   
++---app
+¦   ¦   database.py
+¦   ¦   main.py
+¦   ¦   models.py
+¦   ¦   __init__.py
+¦   ¦   
+¦   +---services
+¦           evaluators.py
+¦           meta_eval.py
+¦           optimizer.py
+¦           __init__.py
+¦           
++---frontend
+        dashboard.py
+        Dockerfile
+        
