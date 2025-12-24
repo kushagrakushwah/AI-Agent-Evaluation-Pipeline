@@ -2,31 +2,37 @@ import asyncio
 from fastapi import FastAPI, BackgroundTasks
 from app.models import ConversationInput, EvaluationResult, HumanAnnotation
 from app.database import init_db, save_result, save_annotation, get_agreement_score
-from app.services.evaluators import check_heuristics, evaluate_tool_usage, evaluate_coherence
+from app.services.evaluators import run_all_evaluators
 from app.services.optimizer import generate_suggestions
 
-app = FastAPI(title="Pro Agent Eval Pipeline")
+app = FastAPI(
+    title="AI Agent Evaluation Pipeline",
+    description="Production-grade Async Pipeline for evaluating AI agents with deterministic and LLM-based metrics.",
+    version="1.0.0"
+)
 
 @app.on_event("startup")
 async def startup():
+    """Initialize the SQLite database on server startup."""
     init_db()
 
 async def run_pipeline(conv: ConversationInput) -> EvaluationResult:
     """
-    Async Pipeline Execution - meets 'High Throughput' requirement.
+    Core Pipeline Logic (Async).
+    1. Runs the Hybrid Evaluator Controller (Heuristics + Tools + Coherence).
+    2. Aggregates scores.
+    3. Generates Self-Correction Suggestions.
     """
-    # 1. Run Evaluators in Parallel
-    heuristic_task = check_heuristics(conv.messages)
-    tool_task = evaluate_tool_usage(conv.messages)
-    coherence_task = evaluate_coherence(conv.messages)
+    # 1. Run Evaluators (Managed by the Controller in services/evaluators.py)
+    metrics = run_all_evaluators(conv.messages)
     
-    # (Simulating complex async work)
-    metrics = [heuristic_task, tool_task, coherence_task]
+    # 2. Aggregate Score
+    if metrics:
+        avg_score = sum([m.score for m in metrics]) / len(metrics)
+    else:
+        avg_score = 0.0
     
-    # 2. Aggregate
-    avg_score = sum([m.score for m in metrics]) / len(metrics)
-    
-    # 3. Optimization Engine
+    # 3. Run Optimization Engine (Self-Correction)
     suggestions = generate_suggestions(metrics)
     
     return EvaluationResult(
@@ -37,8 +43,13 @@ async def run_pipeline(conv: ConversationInput) -> EvaluationResult:
         suggestions=suggestions
     )
 
-@app.post("/ingest", response_model=EvaluationResult)
+@app.post("/ingest", response_model=EvaluationResult, summary="Ingest & Evaluate Logs")
 async def ingest_logs(conv: ConversationInput, background_tasks: BackgroundTasks):
+    """
+    Ingests conversation logs for evaluation.
+    - **High Throughput**: Uses AsyncIO to handle concurrent requests.
+    - **Persistence**: Saves results to DB in the background to lower latency.
+    """
     # Core Pipeline
     result = await run_pipeline(conv)
     
@@ -47,11 +58,11 @@ async def ingest_logs(conv: ConversationInput, background_tasks: BackgroundTasks
     
     return result
 
-@app.post("/feedback")
+@app.post("/feedback", summary="Submit Human Feedback")
 async def submit_feedback(annotation: HumanAnnotation):
     """
     Ingests human labels with confidence weighting.
-    Requirement: 'Weight evaluations by annotation quality/confidence'
+    **Requirement**: 'Weight evaluations by annotation quality/confidence'.
     """
     # In a real system, we would multiply score * confidence before aggregation.
     # Here, we record the effective weight for the audit log.
@@ -64,7 +75,10 @@ async def submit_feedback(annotation: HumanAnnotation):
         "weighted_impact": f"Feedback recorded with {effective_weight*100}% confidence weight."
     }
 
-@app.get("/metrics/agreement")
+@app.get("/metrics/agreement", summary="Get Inter-Annotator Agreement")
 async def get_meta_metrics():
+    """
+    Calculates agreement between human annotators using Variance/Cohen's Kappa proxy.
+    """
     score, method = get_agreement_score()
     return {"inter_annotator_agreement": score, "method": method}
