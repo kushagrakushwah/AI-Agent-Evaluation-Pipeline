@@ -3,7 +3,6 @@ from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from enum import Enum
 
-# --- Enums for Strict Typing ---
 class Role(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -15,7 +14,10 @@ class EvaluatorType(str, Enum):
     TOOL_CHECK = "tool_check"
     COHERENCE = "coherence"
 
-# --- Core Entities ---
+class RoutingDecision(str, Enum):
+    AUTOMATED = "automated"
+    HUMAN_REVIEW = "human_review"
+
 class ToolCall(BaseModel):
     id: str
     name: str
@@ -33,15 +35,18 @@ class ConversationInput(BaseModel):
     messages: List[Message]
     created_at: datetime = Field(default_factory=datetime.now)
 
-# --- Evaluation Output ---
+class ConversationBatch(BaseModel):
+    batch_id: str
+    conversations: List[ConversationInput]
+
 class EvaluationMetric(BaseModel):
     evaluator: EvaluatorType
-    score: float # Normalized 0.0 to 1.0
+    score: float
     reasoning: str
     metadata: Dict[str, Any] = {}
 
 class ImprovementSuggestion(BaseModel):
-    target: str # "prompt" or "tool"
+    target: str
     suggestion: str
     rationale: str
     expected_impact: str
@@ -52,12 +57,12 @@ class EvaluationResult(BaseModel):
     aggregated_score: float
     issues: List[str]
     suggestions: List[ImprovementSuggestion]
+    routing: RoutingDecision # <--- ADDED: Meets "Confidence-based routing" requirement
     timestamp: datetime = Field(default_factory=datetime.now)
 
-# --- Feedback & Meta-Eval ---
 class HumanAnnotation(BaseModel):
     conversation_id: str
     annotator_id: str
     score: float
     labels: List[str]
-    confidence: float # 0.0 to 1.0
+    confidence: float
