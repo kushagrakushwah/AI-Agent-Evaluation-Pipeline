@@ -2,23 +2,25 @@ version: '3.8'
 
 services:
   backend:
-    build: 
-      context: .
-      dockerfile: Dockerfile
+    build: .
+    container_name: agent-eval-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     volumes:
-      - ./app:/app/app
+      - .:/app
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
 
   frontend:
-    build: 
-      context: ./frontend
-      dockerfile: Dockerfile
+    build: .
+    container_name: agent-eval-frontend
+    command: streamlit run frontend/dashboard.py --server.port 8501 --server.address 0.0.0.0
     ports:
       - "8501:8501"
-    environment:
-      - BACKEND_URL=http://backend:8000
+    volumes:
+      - .:/app
     depends_on:
       - backend
+    environment:
+      - BACKEND_URL=http://backend:8000
