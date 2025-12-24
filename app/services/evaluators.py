@@ -11,18 +11,38 @@ from app.models import Message, ToolCall, EvaluationMetric, EvaluatorType
 # ==============================================================================
 
 def check_heuristics(messages: List[Message]) -> EvaluationMetric:
-    """Checks latency and message formatting."""
+    """Checks actual latency and message formatting."""
     issues = []
     score = 1.0
     
-    # Latency Simulation (Requirement: Monitor Latency)
-    simulated_latency_ms = random.randint(100, 1500)
-    LATENCY_THRESHOLD = 1000
+    # 1. LATENCY CHECK (Fixed: Uses actual timestamps instead of simulation)
+    # Logic: Find the last 'assistant' message and the 'user' message immediately preceding it.
+    last_assistant_time = None
+    last_user_time = None
     
-    if simulated_latency_ms > LATENCY_THRESHOLD:
-        issues.append(f"Latency violation: Response took {simulated_latency_ms}ms (Threshold: {LATENCY_THRESHOLD}ms)")
-        score -= 0.15
+    # Iterate backwards to find the most recent interaction pair
+    for msg in reversed(messages):
+        if msg.role == "assistant" and not last_assistant_time:
+            last_assistant_time = msg.timestamp
+        if msg.role == "user" and not last_user_time and last_assistant_time:
+            last_user_time = msg.timestamp
+            break # Found the pair
+            
+    real_latency_ms = 0.0
+    LATENCY_THRESHOLD = 1000 # 1 second threshold
+    
+    if last_user_time and last_assistant_time:
+        delta = last_assistant_time - last_user_time
+        real_latency_ms = delta.total_seconds() * 1000
         
+        if real_latency_ms > LATENCY_THRESHOLD:
+            issues.append(f"Latency violation: Response took {real_latency_ms:.2f}ms (Threshold: {LATENCY_THRESHOLD}ms)")
+            score -= 0.15
+    else:
+        # Fallback if timestamps are missing or conversation structure is odd
+        issues.append("Could not calculate latency (missing timestamp pair).")
+
+    # 2. EMPTY MESSAGE CHECK
     for msg in messages:
         if not msg.content and not msg.tool_calls:
             issues.append(f"Empty message detected for role {msg.role}")
@@ -31,8 +51,8 @@ def check_heuristics(messages: List[Message]) -> EvaluationMetric:
     return EvaluationMetric(
         evaluator=EvaluatorType.COHERENCE,
         score=max(0.0, score),
-        reasoning=f"Heuristics Check: {len(issues)} issues found. System Latency: {simulated_latency_ms}ms.",
-        metadata={"issues": issues, "latency_ms": simulated_latency_ms}
+        reasoning=f"Heuristics Check: {len(issues)} issues found. Actual Latency: {real_latency_ms:.2f}ms.",
+        metadata={"issues": issues, "latency_ms": real_latency_ms}
     )
 
 def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
@@ -64,7 +84,7 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
     if not user_intent:
         return EvaluationMetric(evaluator=EvaluatorType.TOOL_CHECK, score=1.0, reasoning="No tool intent detected.")
 
-    # 2. Check Execution & Format (Scenario 1 Requirement)
+    # 2. Check Execution & Format
     tool_called = False
     valid_args = True
     
@@ -82,7 +102,7 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
                         reasoning.append(f"Tool '{tool.name}' missing args: {missing}")
                         score = 0.5
                     
-                    # B. Check Date Format (Scenario 1 Specific)
+                    # B. Check Date Format
                     if tool.name == "flight_search" and "date" in tool.arguments:
                         date_val = tool.arguments["date"]
                         # Regex for YYYY-MM-DD
@@ -104,11 +124,33 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
     )
 
 def evaluate_coherence(messages: List[Message]) -> EvaluationMetric:
-    """Checks conversation flow."""
+    """Checks conversation flow, repetition, and abrupt endings."""
+    issues = []
+    score = 1.0
+    
+    # 1. Check for abrupt ending on tool output (Existing)
     last_msg = messages[-1]
     if last_msg.role == "tool":
-        return EvaluationMetric(evaluator=EvaluatorType.COHERENCE, score=0.5, reasoning="Ended abruptly on tool output.")
-    return EvaluationMetric(evaluator=EvaluatorType.COHERENCE, score=1.0, reasoning="Flow consistent.")
+        issues.append("Ended abruptly on tool output.")
+        score -= 0.5
+
+    # 2. Check for Repetition Loops (Assistant repeating itself)
+    assistant_msgs = [m.content for m in messages if m.role == "assistant" and m.content]
+    if len(assistant_msgs) != len(set(assistant_msgs)):
+        issues.append("Detected repetitive content (Loop).")
+        score -= 0.3
+
+    # 3. Check for Empty User Turns (ignoring tool outputs)
+    for msg in messages:
+        if msg.role == "user" and not msg.content:
+            issues.append("Empty user message found.")
+            score -= 0.2
+
+    return EvaluationMetric(
+        evaluator=EvaluatorType.COHERENCE, 
+        score=max(0.0, score), 
+        reasoning="; ".join(issues) if issues else "Flow consistent."
+    )
 
 # ==============================================================================
 # 🔴 MODE 2: LLM-AS-A-JUDGE (COMMENTED OUT - REQUIRES API KEY)

@@ -69,7 +69,13 @@ async def ingest_batch(batch: ConversationBatch, background_tasks: BackgroundTas
 @app.post("/feedback")
 async def submit_feedback(annotation: HumanAnnotation):
     effective_weight = annotation.confidence 
-    save_annotation(annotation.conversation_id, annotation.annotator_id, annotation.score)
+    # FIX: Pass confidence to the database function
+    save_annotation(
+        annotation.conversation_id, 
+        annotation.annotator_id, 
+        annotation.score, 
+        annotation.confidence
+    )
     return {"status": "recorded", "weighted_impact": f"{effective_weight*100}%"}
 
 @app.get("/metrics/agreement")

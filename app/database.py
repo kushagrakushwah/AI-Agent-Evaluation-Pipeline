@@ -1,10 +1,12 @@
 import sqlite3
 import json
 import pandas as pd
+import threading
 from datetime import datetime
 from app.models import EvaluationResult
 
 DB_NAME = "eval_platform.db"
+db_lock = threading.Lock() # <--- FIX: Lock for thread-safe SQLite writes
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -20,42 +22,48 @@ def init_db():
                   FOREIGN KEY(id) REFERENCES logs(id))''')
                   
     # 3. Annotations Table (For Multi-Annotator Agreement)
+    # FIX: Added 'confidence' column
     c.execute('''CREATE TABLE IF NOT EXISTS annotations 
-                 (conversation_id TEXT, annotator_id TEXT, score REAL, labels JSON,
+                 (conversation_id TEXT, annotator_id TEXT, score REAL, labels JSON, confidence REAL,
                   PRIMARY KEY (conversation_id, annotator_id))''')
     
     conn.commit()
     conn.close()
 
 def save_result(result: EvaluationResult):
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("INSERT OR REPLACE INTO logs (id, logs, timestamp) VALUES (?, ?, ?)", 
-                 (result.conversation_id, "{}", datetime.now())) # Storing placeholder for raw logs for now
-    
-    conn.execute("INSERT INTO evaluations VALUES (?, ?, ?, ?, ?)",
-                 (result.conversation_id, 
-                  json.dumps([m.dict() for m in result.metrics]), 
-                  result.aggregated_score,
-                  json.dumps([s.dict() for s in result.suggestions]),
-                  datetime.now()))
-    conn.commit()
-    conn.close()
+    with db_lock: # <--- FIX: Thread safety
+        conn = sqlite3.connect(DB_NAME)
+        conn.execute("INSERT OR REPLACE INTO logs (id, logs, timestamp) VALUES (?, ?, ?)", 
+                     (result.conversation_id, "{}", datetime.now())) 
+        
+        conn.execute("INSERT INTO evaluations VALUES (?, ?, ?, ?, ?)",
+                     (result.conversation_id, 
+                      json.dumps([m.dict() for m in result.metrics]), 
+                      result.aggregated_score,
+                      json.dumps([s.dict() for s in result.suggestions]),
+                      datetime.now()))
+        conn.commit()
+        conn.close()
 
-def save_annotation(conv_id, annotator, score):
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("INSERT OR REPLACE INTO annotations VALUES (?, ?, ?, ?)", 
-                 (conv_id, annotator, score, "[]"))
-    conn.commit()
-    conn.close()
+def save_annotation(conv_id, annotator, score, confidence=1.0): # <--- FIX: Added confidence param
+    with db_lock: # <--- FIX: Thread safety
+        conn = sqlite3.connect(DB_NAME)
+        # FIX: Inserting confidence value
+        conn.execute("INSERT OR REPLACE INTO annotations VALUES (?, ?, ?, ?, ?)", 
+                     (conv_id, annotator, score, "[]", confidence))
+        conn.commit()
+        conn.close()
 
 def get_agreement_score():
     """
     Calculates Variance/Agreement between annotators.
     Requirement: 'Handle disagreement'
     """
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql("SELECT conversation_id, score FROM annotations", conn)
-    conn.close()
+    # Using lock for read is safer in high-concurrency though strictly SQLite can handle concurrent reads
+    with db_lock: 
+        conn = sqlite3.connect(DB_NAME)
+        df = pd.read_sql("SELECT conversation_id, score FROM annotations", conn)
+        conn.close()
     
     if df.empty or len(df) < 2:
         return 0.0, "Insufficient Data"
