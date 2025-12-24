@@ -15,7 +15,7 @@ def check_heuristics(messages: List[Message]) -> EvaluationMetric:
     issues = []
     score = 1.0
     
-    # Latency Simulation
+    # Latency Simulation (Requirement: Monitor Latency)
     simulated_latency_ms = random.randint(100, 1500)
     LATENCY_THRESHOLD = 1000
     
@@ -36,7 +36,7 @@ def check_heuristics(messages: List[Message]) -> EvaluationMetric:
     )
 
 def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
-    """Validates tool calls using Regex Intent Matching (Deterministic)."""
+    """Validates tool calls using Regex Intent and Parameter Formatting."""
     score = 1.0
     reasoning = []
     
@@ -46,6 +46,12 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
         r"weather": "get_weather"
     }
     
+    tool_definitions = {
+        "flight_search": ["destination", "date"],
+        "process_refund": ["order_id"],
+        "get_weather": ["city"]
+    }
+
     # 1. Detect Intent
     user_intent = None
     for msg in messages:
@@ -58,18 +64,37 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
     if not user_intent:
         return EvaluationMetric(evaluator=EvaluatorType.TOOL_CHECK, score=1.0, reasoning="No tool intent detected.")
 
-    # 2. Check Execution
+    # 2. Check Execution & Format (Scenario 1 Requirement)
     tool_called = False
+    valid_args = True
+    
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
             for tool in msg.tool_calls:
                 if tool.name == user_intent:
                     tool_called = True
+                    
+                    # A. Check Missing Args
+                    required_args = tool_definitions.get(tool.name, [])
+                    missing = [arg for arg in required_args if arg not in tool.arguments]
+                    if missing:
+                        valid_args = False
+                        reasoning.append(f"Tool '{tool.name}' missing args: {missing}")
+                        score = 0.5
+                    
+                    # B. Check Date Format (Scenario 1 Specific)
+                    if tool.name == "flight_search" and "date" in tool.arguments:
+                        date_val = tool.arguments["date"]
+                        # Regex for YYYY-MM-DD
+                        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
+                            valid_args = False
+                            reasoning.append(f"Invalid Date Format in 'flight_search': '{date_val}'. Expected YYYY-MM-DD.")
+                            score = 0.5
 
     if not tool_called:
         score = 0.0
         reasoning.append(f"User asked for '{user_intent}' but no tool was called (Hallucination).")
-    else:
+    elif valid_args:
         reasoning.append(f"Tool '{user_intent}' called correctly.")
 
     return EvaluationMetric(
