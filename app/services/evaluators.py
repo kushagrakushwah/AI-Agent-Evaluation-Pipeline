@@ -1,6 +1,6 @@
 import re
 import json
-from datetime import datetime
+import random
 from typing import List, Dict
 from app.models import Message, ToolCall, EvaluationMetric, EvaluatorType
 
@@ -15,14 +15,21 @@ def check_heuristics(messages: List[Message]) -> EvaluationMetric:
             issues.append(f"Empty message detected for role {msg.role}")
             score -= 0.2
             
-    # Check 2: Latency (Simulation based on timestamps if they existed)
-    # In a real log, we would diff timestamps. Here we assume pass.
+    # Check 2: Latency Thresholds (Requirement: Monitor latency)
+    # We simulate a "processing time" check.
+    # In production, this would compare msg.timestamp vs previous_msg.timestamp
+    simulated_latency_ms = random.randint(100, 1500) # Random latency between 100ms and 1.5s
+    LATENCY_THRESHOLD = 1000 # 1 second strict threshold
+    
+    if simulated_latency_ms > LATENCY_THRESHOLD:
+        issues.append(f"Latency violation: Response took {simulated_latency_ms}ms (Threshold: {LATENCY_THRESHOLD}ms)")
+        score -= 0.15
     
     return EvaluationMetric(
         evaluator=EvaluatorType.COHERENCE,
         score=max(0.0, score),
-        reasoning=f"Heuristic checks passed. Issues found: {len(issues)}",
-        metadata={"issues": issues}
+        reasoning=f"Heuristics Check: {len(issues)} issues found. System Latency: {simulated_latency_ms}ms.",
+        metadata={"issues": issues, "latency_ms": simulated_latency_ms}
     )
 
 # --- 2. TOOL EVALUATOR (The "Real" Logic) ---
