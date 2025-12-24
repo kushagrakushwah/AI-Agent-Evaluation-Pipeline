@@ -1,29 +1,32 @@
 import re
 import json
 import random
+import os
 from typing import List, Dict
 from app.models import Message, ToolCall, EvaluationMetric, EvaluatorType
+# from openai import OpenAI # <--- UNCOMMENT WHEN YOU HAVE KEY
 
-# --- 1. HEURISTIC CHECKER (Latency & Format) ---
+# ==============================================================================
+# 🟢 MODE 1: DETERMINISTIC LOGIC (ACTIVE NOW - FREE & FAST)
+# ==============================================================================
+
 def check_heuristics(messages: List[Message]) -> EvaluationMetric:
+    """Checks latency and message formatting."""
     issues = []
     score = 1.0
     
-    # Check 1: Message Formatting
-    for msg in messages:
-        if not msg.content and not msg.tool_calls:
-            issues.append(f"Empty message detected for role {msg.role}")
-            score -= 0.2
-            
-    # Check 2: Latency Thresholds (Requirement: Monitor latency)
-    # We simulate a "processing time" check.
-    # In production, this would compare msg.timestamp vs previous_msg.timestamp
-    simulated_latency_ms = random.randint(100, 1500) # Random latency between 100ms and 1.5s
-    LATENCY_THRESHOLD = 1000 # 1 second strict threshold
+    # Latency Simulation
+    simulated_latency_ms = random.randint(100, 1500)
+    LATENCY_THRESHOLD = 1000
     
     if simulated_latency_ms > LATENCY_THRESHOLD:
         issues.append(f"Latency violation: Response took {simulated_latency_ms}ms (Threshold: {LATENCY_THRESHOLD}ms)")
         score -= 0.15
+        
+    for msg in messages:
+        if not msg.content and not msg.tool_calls:
+            issues.append(f"Empty message detected for role {msg.role}")
+            score -= 0.2
     
     return EvaluationMetric(
         evaluator=EvaluatorType.COHERENCE,
@@ -32,29 +35,18 @@ def check_heuristics(messages: List[Message]) -> EvaluationMetric:
         metadata={"issues": issues, "latency_ms": simulated_latency_ms}
     )
 
-# --- 2. TOOL EVALUATOR (The "Real" Logic) ---
 def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
-    """
-    Validates if tools are called when expected (using Regex patterns).
-    """
+    """Validates tool calls using Regex Intent Matching (Deterministic)."""
     score = 1.0
     reasoning = []
     
-    # PATTERN REPO: These rules replace the "AI". 
-    # In production, these would load from a config file.
     intent_patterns = {
         r"(book|find|search).*flight": "flight_search",
         r"refund": "process_refund",
         r"weather": "get_weather"
     }
     
-    tool_definitions = {
-        "flight_search": ["destination", "date"],
-        "process_refund": ["order_id"],
-        "get_weather": ["city"]
-    }
-
-    # 1. Scan User Intent
+    # 1. Detect Intent
     user_intent = None
     for msg in messages:
         if msg.role == "user":
@@ -66,29 +58,19 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
     if not user_intent:
         return EvaluationMetric(evaluator=EvaluatorType.TOOL_CHECK, score=1.0, reasoning="No tool intent detected.")
 
-    # 2. Check Assistant Response
+    # 2. Check Execution
     tool_called = False
-    valid_args = True
-    
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
             for tool in msg.tool_calls:
                 if tool.name == user_intent:
                     tool_called = True
-                    # Validate Arguments (Schema Check)
-                    required_args = tool_definitions.get(tool.name, [])
-                    missing = [arg for arg in required_args if arg not in tool.arguments]
-                    
-                    if missing:
-                        valid_args = False
-                        reasoning.append(f"Tool '{tool.name}' missing required args: {missing}")
-                        score = 0.5 # Partial Fail
 
     if not tool_called:
         score = 0.0
         reasoning.append(f"User asked for '{user_intent}' but no tool was called (Hallucination).")
-    elif valid_args:
-        reasoning.append(f"Tool '{user_intent}' called correctly with valid arguments.")
+    else:
+        reasoning.append(f"Tool '{user_intent}' called correctly.")
 
     return EvaluationMetric(
         evaluator=EvaluatorType.TOOL_CHECK,
@@ -96,25 +78,74 @@ def evaluate_tool_usage(messages: List[Message]) -> EvaluationMetric:
         reasoning="; ".join(reasoning)
     )
 
-# --- 3. COHERENCE (Context Check) ---
 def evaluate_coherence(messages: List[Message]) -> EvaluationMetric:
-    # Logic: Check if conversation resolves strictly.
-    # If the last message is a question from the assistant, it's open-ended (Neutral).
-    # If it's a tool output followed by text, it's coherent.
-    
+    """Checks conversation flow."""
     last_msg = messages[-1]
-    score = 1.0
-    
-    if last_msg.role == "assistant" and "?" in last_msg.content:
-        reasoning = "Conversation ended with a clarifying question."
-    elif last_msg.role == "tool":
-        score = 0.5
-        reasoning = "Conversation ended abruptly on a tool output."
-    else:
-        reasoning = "Flow appears consistent."
+    if last_msg.role == "tool":
+        return EvaluationMetric(evaluator=EvaluatorType.COHERENCE, score=0.5, reasoning="Ended abruptly on tool output.")
+    return EvaluationMetric(evaluator=EvaluatorType.COHERENCE, score=1.0, reasoning="Flow consistent.")
+
+# ==============================================================================
+# 🔴 MODE 2: LLM-AS-A-JUDGE (COMMENTED OUT - REQUIRES API KEY)
+# Instructions: To enable, uncomment this block and the import at top.
+# ==============================================================================
+
+"""
+class LLMJudge:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    def evaluate(self, messages: List[Message]) -> List[EvaluationMetric]:
+        conv_text = "\\n".join([f"{m.role}: {m.content}" for m in messages])
         
-    return EvaluationMetric(
-        evaluator=EvaluatorType.COHERENCE,
-        score=score,
-        reasoning=reasoning
-    )
+        prompt = f'''
+        You are a QA Evaluator. Analyze this conversation for 1) Tool Usage and 2) Coherence.
+        
+        Conversation:
+        {conv_text}
+        
+        Output JSON format strictly:
+        {{
+            "tool_score": 0.0-1.0,
+            "tool_reasoning": "string",
+            "coherence_score": 0.0-1.0,
+            "coherence_reasoning": "string"
+        }}
+        '''
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(response.choices[0].message.content)
+            
+            return [
+                EvaluationMetric(evaluator=EvaluatorType.TOOL_CHECK, score=data['tool_score'], reasoning=data['tool_reasoning']),
+                EvaluationMetric(evaluator=EvaluatorType.COHERENCE, score=data['coherence_score'], reasoning=data['coherence_reasoning'])
+            ]
+        except Exception as e:
+            return []
+"""
+
+# ==============================================================================
+# 🎛️ CONTROLLER
+# ==============================================================================
+
+def run_all_evaluators(messages: List[Message]) -> List[EvaluationMetric]:
+    # 1. Always run Heuristics (Fast)
+    metrics = [check_heuristics(messages)]
+    
+    # 2. Logic Switch
+    USE_OPENAI = False # <--- CHANGE TO TRUE TO USE LLM CODE ABOVE
+    
+    if USE_OPENAI:
+        # metrics.extend(LLMJudge().evaluate(messages)) # Uncomment when LLM class is active
+        pass
+    else:
+        # Run Deterministic Checks
+        metrics.append(evaluate_tool_usage(messages))
+        metrics.append(evaluate_coherence(messages))
+        
+    return metrics
